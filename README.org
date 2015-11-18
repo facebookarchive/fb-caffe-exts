@@ -1,0 +1,126 @@
+* =fb-caffe-exts=
+=fb-caffe-exts= is a collection of extensions developed at FB while using Caffe
+in (mainly) production scenarios.
+
+** =predictor/=
+A simple C++ library that wraps the common pattern of running a =caffe::Net= in
+multiple threads while sharing weights. It also provides a slightly more
+convenient usage API for the inference case.
+
+#+BEGIN_SRC c++
+  #include "caffe/predictor/Predictor.h"
+
+  // In your setup phase
+  predictor_ = folly::make_unique<caffe::fb::Predictor>(FLAGS_prototxt_path,
+                                                        FLAGS_weights_path);
+
+  // When calling in a worker thread
+  static thread_local caffe::Blob<float> input_blob;
+  input_blob.set_cpu_data(input_data); // avoid the copy.
+  const auto& output_blobs = predictor_->forward({&input_blob});
+  return output_blobs[FLAGS_output_layer_name];
+#+END_SRC
+
+Of note is the =predictor/Optimize.{h,cpp}=, which optimizes memory
+usage by automatically reusing the intermediate activations when this is safe.
+This reduces the amount of memory required for intermediate activations by
+around 50% for AlexNet-style models, and around 75% for GoogLeNet-style
+models.
+
+We can plot each set of activations in the topological ordering of the network,
+with a unique color for each reused activation buffer, with the height of the
+blob proportional to the size of the buffer.
+
+For example, in an AlexNet-like model, the allocation looks like
+#+ATTR_HTML: :height 300px
+[[./doc/caffenet.png]]
+
+A corresponding allocation for GoogLeNet looks like
+#+ATTR_HTML: :height 300px
+[[./doc/googlenet.png]]
+
+
+The idea is essentially linear scan register allocation. We
+
+- compute a set of "live ranges" for each =caffe::SyncedMemory= (due to sharing,
+  we can't do this at a =caffe::Blob= level)
+- compute a set of live intervals, and schedule each =caffe::SyncedMemory= in a
+  non-overlapping fashion onto each live interval
+- allocate a canonical =caffe::SyncedMemory= buffer for each live interval
+- Update the blob internal pointers to point to the canonical buffer
+
+Depending on the model, the buffer reuse can also lead to some non-trivial
+performance improvements at inference time.
+
+To enable this just pass =Predictor::Optimization::MEMORY= to the =Predictor=
+constructor.
+
+** =torch2caffe/=
+A library for converting pre-trained Torch models to the equivalent Caffe models.
+
+=torch_layers.lua= describes the set of layers that we can automatically
+convert, and =test.lua= shows some examples of more complex models being
+converted end to end.
+
+For example, complex CNNs ([[http://arxiv.org/abs/1409.4842][GoogLeNet]], etc), deep LSTMs (created in [[https://github.com/torch/nngraph][nngraph]]),
+models with tricky parallel/split connectivity structures ([[http://arxiv.org/abs/1103.0398][Natural Language
+Processing (almost) from Scratch]]), etc.
+
+This can be invoked as
+
+#+BEGIN_EXAMPLE
+  ∴ th torch2caffe/torch2caffe.lua --help
+  --input (default "") Input model file
+  --preprocessing (default "") Preprocess the model
+  --prototxt (default "") Output prototxt model file
+  --caffemodel (default "") Output model weights file
+  --format (default "lua") Format: lua | luathrift
+  --input-tensor (default "") (Optional) Predefined input tensor
+  --verify (default "") (Optional) Verify existing
+  <input_dims...> (number) Input dimensions (e.g. 10N x 3C x 227H x 227W)
+
+#+END_EXAMPLE
+
+
+This works by
+
+- (optionally) preprocessing the model provided in =--input=, (folding
+  BatchNormalization layers into the preceding layer, etc),
+- walking the Torch module graph of the model provide in =--input=,
+- converting it to the equivalent Caffe module graph,
+- copying the weights into the Caffe model,
+- Running some test inputs (of size =input_dims...=) through both models and
+  verifying the outputs are identical.
+** =conversions/=
+A simple CLI tool for running some simple Caffe network transformations.
+
+#+BEGIN_EXAMPLE
+  ∴ python conversions.py vision --help
+  Usage: conversions.py vision [OPTIONS]
+
+  Options:
+    --prototxt TEXT           [required]
+    --caffemodel TEXT         [required]
+    --output-prototxt TEXT    [required]
+    --output-caffemodel TEXT  [required]
+    --help                    Show this message and exit.
+#+END_EXAMPLE
+
+The main usage at the moment is automating the [[https://github.com/BVLC/caffe/blob/master/examples/net_surgery.ipynb][Net Surgery]] notebook.
+
+
+** Building and Installing
+As you might expect, this library depends on an up-to-date [[http://caffe.berkeleyvision.org/][BVLC Caffe]] installation.
+
+The additional dependencies are
+
+- The C++ libraries require [[https://github.com/facebook/folly][folly]].
+- The Python =conversions= libraries requires [[http://click.pocoo.org/5/][click]].
+
+You can drop the C++ components into an existing Caffe installation. We'll
+update the repo with an example modification to an existing =Makefile.config=
+and a =CMake= based solution.
+
+** Contact
+Feel free to open issues on this repo for requests/bugs, or contact [[mailto:tulloch@fb.com][Andrew
+Tulloch]] directly.
