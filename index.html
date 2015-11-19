@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="UTF-8">
+    <title>fb-caffe-exts by ajtulloch</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" type="text/css" href="stylesheets/normalize.css" media="screen">
+    <link href='https://fonts.googleapis.com/css?family=Open+Sans:400,700' rel='stylesheet' type='text/css'>
+    <link rel="stylesheet" type="text/css" href="stylesheets/stylesheet.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="stylesheets/github-light.css" media="screen">
+  </head>
+  <body>
+    <section class="page-header">
+      <h1 class="project-name">fb-caffe-exts</h1>
+      <h2 class="project-tagline">Some handy utility libraries and tools for the Caffe deep learning framework.</h2>
+      <a href="https://github.com/ajtulloch/fb-caffe-exts" class="btn">View on GitHub</a>
+      <a href="https://github.com/ajtulloch/fb-caffe-exts/zipball/master" class="btn">Download .zip</a>
+      <a href="https://github.com/ajtulloch/fb-caffe-exts/tarball/master" class="btn">Download .tar.gz</a>
+    </section>
+
+    <section class="main-content">
+      <div id="table-of-contents">
+<h2>
+<a id="table-of-contents" class="anchor" href="#table-of-contents" aria-hidden="true"><span class="octicon octicon-link"></span></a>Table of Contents</h2>
+<div id="text-table-of-contents">
+<ul>
+<li>
+<a href="#orgheadline6">1. <code>fb-caffe-exts</code></a>
+<ul>
+<li><a href="#orgheadline1">1.1. <code>predictor/</code></a></li>
+<li><a href="#orgheadline2">1.2. <code>torch2caffe/</code></a></li>
+<li><a href="#orgheadline3">1.3. <code>conversions/</code></a></li>
+<li><a href="#orgheadline4">1.4. Building and Installing</a></li>
+<li><a href="#orgheadline5">1.5. Contact</a></li>
+</ul>
+</li>
+</ul>
+</div>
+
+<p></p>
+</div>
+
+<h1>
+<a id="fb-caffe-exts" class="anchor" href="#fb-caffe-exts" aria-hidden="true"><span class="octicon octicon-link"></span></a><code>fb-caffe-exts</code><a id="orgheadline6"></a>
+</h1>
+
+<p><code>fb-caffe-exts</code> is a collection of extensions developed at FB while using Caffe
+in (mainly) production scenarios.</p>
+
+<h2>
+<a id="predictor" class="anchor" href="#predictor" aria-hidden="true"><span class="octicon octicon-link"></span></a><code>predictor/</code><a id="orgheadline1"></a>
+</h2>
+
+<p>A simple C++ library that wraps the common pattern of running a <code>caffe::Net</code> in
+multiple threads while sharing weights. It also provides a slightly more
+convenient usage API for the inference case.</p>
+
+<pre><code>#include "caffe/predictor/Predictor.h"
+
+// In your setup phase
+predictor_ = folly::make_unique&lt;caffe::fb::Predictor&gt;(FLAGS_prototxt_path,
+                                                      FLAGS_weights_path);
+
+// When calling in a worker thread
+static thread_local caffe::Blob&lt;float&gt; input_blob;
+input_blob.set_cpu_data(input_data); // avoid the copy.
+const auto&amp; output_blobs = predictor_-&gt;forward({&amp;input_blob});
+return output_blobs[FLAGS_output_layer_name];
+</code></pre>
+
+<p>Of note is the <code>predictor/Optimize.{h,cpp}</code>, which optimizes memory
+usage by automatically reusing the intermediate activations when this is safe.
+This reduces the amount of memory required for intermediate activations by
+around 50% for AlexNet-style models, and around 75% for GoogLeNet-style
+models.</p>
+
+<p>We can plot each set of activations in the topological ordering of the network,
+with a unique color for each reused activation buffer, with the height of the
+blob proportional to the size of the buffer.</p>
+
+<p>For example, in an AlexNet-like model, the allocation looks like</p>
+
+<p><img src="https://raw.githubusercontent.com/facebook/fb-caffe-exts/master/doc/caffenet.png" alt="CaffeNet"></p>
+
+<p>A corresponding allocation for GoogLeNet looks like</p>
+
+<p><img src="https://raw.githubusercontent.com/facebook/fb-caffe-exts/master/doc/googlenet.png" alt="GoogLeNet"></p>
+
+<p>The idea is essentially linear scan register allocation. We</p>
+
+<ul>
+<li>  compute a set of "live ranges" for each <code>caffe::SyncedMemory</code> (due to sharing,
+we can't do this at a <code>caffe::Blob</code> level)</li>
+<li>  compute a set of live intervals, and schedule each <code>caffe::SyncedMemory</code> in a
+non-overlapping fashion onto each live interval</li>
+<li>  allocate a canonical <code>caffe::SyncedMemory</code> buffer for each live interval</li>
+<li>  Update the blob internal pointers to point to the canonical buffer</li>
+</ul>
+
+<p>Depending on the model, the buffer reuse can also lead to some non-trivial
+performance improvements at inference time.</p>
+
+<p>To enable this just pass <code>Predictor::Optimization::MEMORY</code> to the <code>Predictor</code>
+constructor.</p>
+
+<h2>
+<a id="torch2caffe" class="anchor" href="#torch2caffe" aria-hidden="true"><span class="octicon octicon-link"></span></a><code>torch2caffe/</code><a id="orgheadline2"></a>
+</h2>
+
+<p>A library for converting pre-trained Torch models to the equivalent Caffe models.</p>
+
+<p><code>torch_layers.lua</code> describes the set of layers that we can automatically
+convert, and <code>test.lua</code> shows some examples of more complex models being
+converted end to end.</p>
+
+<p>For example, complex CNNs (<a href="http://arxiv.org/abs/1409.4842">GoogLeNet</a>, etc), deep LSTMs (created in <a href="https://github.com/torch/nngraph">nngraph</a>),
+models with tricky parallel/split connectivity structures (<a href="http://arxiv.org/abs/1103.0398">Natural Language
+Processing (almost) from Scratch</a>), etc.</p>
+
+<p>This can be invoked as</p>
+
+<pre><code>∴ th torch2caffe/torch2caffe.lua --help
+--input (default "") Input model file
+--preprocessing (default "") Preprocess the model
+--prototxt (default "") Output prototxt model file
+--caffemodel (default "") Output model weights file
+--format (default "lua") Format: lua | luathrift
+--input-tensor (default "") (Optional) Predefined input tensor
+--verify (default "") (Optional) Verify existing
+&lt;input_dims...&gt; (number) Input dimensions (e.g. 10N x 3C x 227H x 227W)
+</code></pre>
+
+<p>This works by</p>
+
+<ul>
+<li>  (optionally) preprocessing the model provided in <code>--input</code>, (folding
+BatchNormalization layers into the preceding layer, etc),</li>
+<li>  walking the Torch module graph of the model provide in <code>--input</code>,</li>
+<li>  converting it to the equivalent Caffe module graph,</li>
+<li>  copying the weights into the Caffe model,</li>
+<li>  Running some test inputs (of size <code>input_dims...</code>) through both models and
+verifying the outputs are identical.</li>
+</ul>
+
+<h2>
+<a id="conversions" class="anchor" href="#conversions" aria-hidden="true"><span class="octicon octicon-link"></span></a><code>conversions/</code><a id="orgheadline3"></a>
+</h2>
+
+<p>A simple CLI tool for running some simple Caffe network transformations.</p>
+
+<pre><code>∴ python conversions.py vision --help
+Usage: conversions.py vision [OPTIONS]
+
+Options:
+  --prototxt TEXT           [required]
+  --caffemodel TEXT         [required]
+  --output-prototxt TEXT    [required]
+  --output-caffemodel TEXT  [required]
+  --help                    Show this message and exit.
+</code></pre>
+
+<p>The main usage at the moment is automating the <a href="https://github.com/BVLC/caffe/blob/master/examples/net_surgery.ipynb">Net Surgery</a> notebook.</p>
+
+<h2>
+<a id="building-and-installing" class="anchor" href="#building-and-installing" aria-hidden="true"><span class="octicon octicon-link"></span></a>Building and Installing<a id="orgheadline4"></a>
+</h2>
+
+<p>As you might expect, this library depends on an up-to-date <a href="http://caffe.berkeleyvision.org/">BVLC Caffe</a> installation.</p>
+
+<p>The additional dependencies are</p>
+
+<ul>
+<li>  The C++ libraries require <a href="https://github.com/facebook/folly">folly</a>.</li>
+<li>  The Python <code>conversions</code> libraries requires <a href="http://click.pocoo.org/5/">click</a>.</li>
+</ul>
+
+<p>You can drop the C++ components into an existing Caffe installation. We'll
+update the repo with an example modification to an existing <code>Makefile.config</code>
+and a <code>CMake</code> based solution.</p>
+
+<h2>
+<a id="contact" class="anchor" href="#contact" aria-hidden="true"><span class="octicon octicon-link"></span></a>Contact<a id="orgheadline5"></a>
+</h2>
+
+<p>Feel free to open issues on this repo for requests/bugs, or contact <a href="tulloch@fb.com">Andrew
+Tulloch</a> directly.</p>
+
+      <footer class="site-footer">
+        <span class="site-footer-owner"><a href="https://github.com/ajtulloch/fb-caffe-exts">fb-caffe-exts</a> is maintained by <a href="https://github.com/ajtulloch">ajtulloch</a>.</span>
+
+        <span class="site-footer-credits">This page was generated by <a href="https://pages.github.com">GitHub Pages</a> using the <a href="https://github.com/jasonlong/cayman-theme">Cayman theme</a> by <a href="https://twitter.com/jasonlong">Jason Long</a>.</span>
+      </footer>
+
+    </section>
+
+  
+  </body>
+</html>
