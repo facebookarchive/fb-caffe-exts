@@ -88,7 +88,8 @@ OrderedAnalysis<LiveRange> analyze(const caffe::Net<float>& net) {
 // Is the candidate range compatible with this assignment?
 bool isCompatible(const SyncedMemoryRange& candidate,
                   const Assignment& assignment) {
-  if (candidate.second.used == -1) {
+  if (candidate.second.used == kNotUsed ||
+      assignment.back().second.used == kNotUsed) {
     return false;
   }
   if (candidate.first->size() <= kMinimumCountForSharing) {
