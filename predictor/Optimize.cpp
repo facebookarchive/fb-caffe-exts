@@ -8,16 +8,13 @@
  */
 #include "Optimize.h"
 
-#include <unordered_map>
 #include <boost/make_shared.hpp>
-
-#include <glog/stl_logging.h>
-
-#include <folly/Memory.h>
+#include <caffe/net.hpp>
+#include <caffe/syncedmem.hpp>
 #include <folly/Format.h>
-
-#include "caffe/net.hpp"
-#include "caffe/syncedmem.hpp"
+#include <folly/Memory.h>
+#include <glog/stl_logging.h>
+#include <unordered_map>
 
 namespace caffe {
 namespace fb {
