@@ -55,6 +55,38 @@ performance improvements at inference time.
 To enable this just pass =Predictor::Optimization::MEMORY= to the =Predictor=
 constructor.
 
+=predictor/PooledPredictor{.h,cpp}= maintains a thread-pool with thread-local
+instances of =caffe::Net=. Calls to =PooledPredictor::forward()= are added to a
+=folly::MPMCQueue=, which are then dequeued by the thread-pool for processing.
+Calls to =forward()= are non-blocking and return a =folly::Future= that will be
+satisfied when the forward pass job finishes. =PooledPredictor= also supports
+running multiple models over the same thread-pool. That is, if you load two
+models, each thread in the thread-pool will maintain two instances of
+=caffe::Net= (one for each model), and the =netId= param in =forward()=
+specifies the model to run. =PinnedPooledPredictor= is an abstraction over
+=PooledPredictor= when used with multiple models to pin the =forward()= calls
+to a specific model.
+
+#+BEGIN_SRC c++
+  #include "caffe/predictor/PooledPredictor.h"
+
+  // In your setup phase
+  caffe::fb::PooledPredictor::Config config;
+  config.numThreads_ = 10;
+  config.optimization_ = caffe::fb::Predictor::Optimization::MEMORY;
+  config.protoWeightPaths_.emplace_back(FLAGS_prototxt_path,
+                                        FLAGS_weights_path);
+  pooledPredictor_ = caffe::fb::PooledPredictor::makePredictor(config);
+
+  // When calling predictor
+  caffe::fb::PooledPredictor::OutputLayers output_blobs;
+  pooledPredictor_->forward({&input_blob}, &output_blobs)
+    .then([&] {
+      const auto& output_blob = outputs_blobs[FLAGS_output_layer_name];
+      // Do something with output_blob
+    });
+#+END_SRC
+
 ** =torch2caffe/=
 A library for converting pre-trained Torch models to the equivalent Caffe models.
 
