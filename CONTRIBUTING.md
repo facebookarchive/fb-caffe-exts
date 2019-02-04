@@ -2,6 +2,10 @@
 We want to make contributing to this project as easy and transparent as
 possible.
 
+## Code of Conduct
+
+The code of conduct is described in [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+
 ## Our Development Process
 We sync from an internal codebase, which is the source of truth for this
 project. We will apply pull requests to this codebase.
