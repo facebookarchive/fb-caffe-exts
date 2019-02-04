@@ -11,8 +11,8 @@ convenient usage API for the inference case.
   #include "caffe/predictor/Predictor.h"
 
   // In your setup phase
-  predictor_ = folly::make_unique<caffe::fb::Predictor>(FLAGS_prototxt_path,
-                                                        FLAGS_weights_path);
+  predictor_ = Predictor::paths(FLAGS_prototxt_path,
+        FLAGS_weights_path, FLAGS_optimization);
 
   // When calling in a worker thread
   static thread_local caffe::Blob<float> input_blob;
